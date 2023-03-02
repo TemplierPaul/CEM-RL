@@ -105,7 +105,7 @@ def train(n_episodes, output=None, debug=False, render=False, seed=-1):
     n = 0
 
     if args.wandb != "":
-        project, entity = args.wandb.split("/")
+        entity, project = args.wandb.split("/")
         wandb_run = wandb.init(project=project, entity=entity, config=args)
         print("wandb run:", wandb.run.name)
 
