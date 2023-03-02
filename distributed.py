@@ -133,35 +133,35 @@ def train(n_episodes, output=None, debug=False, render=False, seed=-1):
             agent.train(actor_steps, i)
 
         # saving models and scores
-        if step_cpt >= args.period:
-            if debug: print("Logging")
+        # if step_cpt >= args.period:
+        if debug: print("Logging")
 
-            step_cpt = 0
+        step_cpt = 0
 
-            fs = []
-            for i in range(args.n_actor):
-                f, _ = evaluate(
-                    agent.actors[i], envs[i], n_episodes=args.n_eval, seed=seed)
-                fs.append(f)
+        fs = []
+        for i in range(args.n_actor):
+            f, _ = evaluate(
+                agent.actors[i], envs[i], n_episodes=args.n_eval, seed=seed)
+            fs.append(f)
 
-                # print score
-                prRed(f'RL agent fitness:{f}')
+            # print score
+            prRed(f'RL agent fitness:{f}')
 
-            # saving scores
-            res = {"total_steps": total_steps,
-                   "average_score": np.mean(fs), "best_score": np.max(fs)}
-            # print(f"Saving results: {res}")
+        # saving scores
+        res = {"total_steps": total_steps,
+                "average_score": np.mean(fs), "best_score": np.max(fs)}
+        # print(f"Saving results: {res}")
 
-            bar.set_description(f"Total steps: {total_steps} - Average score: {np.mean(fs)}")
-            bar.update(actor_steps)
+        bar.set_description(f"Iteration#{n} - {total_steps} steps - Average score: {np.mean(fs)}")
+        bar.update(actor_steps)
 
-            for i in range(args.n_actor):
-                res[f"score_{i}"] = fs[i]
+        for i in range(args.n_actor):
+            res[f"score_{i}"] = fs[i]
 
-            if args.wandb != "":
-                wandb_run.log(res)
+        if args.wandb != "":
+            wandb_run.log(res)
 
-            n += 1
+        n += 1
 
         # printing iteration resume
         if debug:
