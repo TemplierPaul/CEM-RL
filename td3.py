@@ -190,8 +190,9 @@ class DTD3(object):
         self.policy_freq = args.policy_freq
 
     def train(self, iterations, actor_index):
-
-        for it in tqdm(range(iterations)):
+        pbar = tqdm(range(iterations))
+        pbar.set_description(f"Training Actor {actor_index}")
+        for it in pbar:
 
             # Sample replay buffer
             states, n_states, actions, rewards, dones = self.memory.sample(

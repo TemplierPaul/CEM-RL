@@ -20,8 +20,11 @@ if USE_CUDA:
 else:
     FloatTensor = torch.FloatTensor
 
+import wandb
+from tqdm import tqdm
 
-def evaluate(actor, env, memory=None, n_episodes=1, random=False, noise=None, render=False):
+
+def evaluate(actor, env, memory=None, n_episodes=1, random=False, noise=None, render=False, seed=-1):
     """
     Computes the score of an actor on a given number of runs
     """
@@ -43,19 +46,29 @@ def evaluate(actor, env, memory=None, n_episodes=1, random=False, noise=None, re
     scores = []
     steps = 0
 
-    for _ in range(n_episodes):
+    for ep in range(n_episodes):
+        if args.debug:
+            print(f"\nStarting evaluation episode {ep}")
 
         score = 0
-        obs = deepcopy(env.reset())
-        done = False
+        ep_steps = 0
+        if seed >= 0:
+            obs, _ = env.reset(seed=seed)
+        else:
+            obs, _ = env.reset()
+        obs = deepcopy(obs)
+        done_bool = False
+        print(f"Max frames: {env._max_episode_steps}")
 
-        while not done:
+        while not done_bool:
 
             # get next action and act
             action = policy(obs)
-            n_obs, reward, done, info = env.step(action)
-            done_bool = 0 if steps + \
-                1 == env._max_episode_steps else float(done)
+            n_obs, reward, done, _, info = env.step(action)
+            # done_bool = 1 if steps + \
+            #     1 == env._max_episode_steps else float(done)
+            ep_steps += 1
+            done_bool = 1 if ep_steps == env._max_episode_steps else float(done)
             score += reward
             steps += 1
 
@@ -69,15 +82,20 @@ def evaluate(actor, env, memory=None, n_episodes=1, random=False, noise=None, re
                 env.render()
 
             # reset when done
-            if done:
-                env.reset()
+            # if done_bool:
+            #     print("RESET")
+            #     if seed >= 0:
+            #         env.reset(seed=seed)
+            #     else:
+            #         env.reset()
+            if args.debug: print(f"steps: {steps}", end="\r")
 
         scores.append(score)
 
     return np.mean(scores), steps
 
 
-def train(n_episodes, output=None, debug=False, render=False):
+def train(n_episodes, output=None, debug=False, render=False, seed=-1):
     """
     Train the whole process
     """
@@ -85,9 +103,14 @@ def train(n_episodes, output=None, debug=False, render=False):
     total_steps = 0
     step_cpt = 0
     n = 0
-    df = pd.DataFrame(columns=["total_steps", "average_score", "best_score"] +
-                      ["score_{}".format(i) for i in range(args.n_actor)])
 
+    if args.wandb != "":
+        project, entity = args.wandb.split("/")
+        wandb_run = wandb.init(project=project, entity=entity, config=args)
+        print("wandb run:", wandb.run.name)
+
+    bar = tqdm(total=args.max_steps)
+    if debug: print("Starting training...")
     while total_steps < args.max_steps:
 
         random = total_steps < args.start_steps
@@ -95,51 +118,56 @@ def train(n_episodes, output=None, debug=False, render=False):
 
         # training all agents
         for i in range(args.n_actor):
+            if debug: print(f"Evaluating actor {i}")
             f, s = evaluate(agent.actors[i], envs[i], n_episodes=n_episodes,
-                            noise=a_noise, random=random, memory=memory, render=render)
+                            noise=a_noise, random=random, memory=memory, render=render, seed=seed)
             actor_steps += s
             total_steps += s
             step_cpt += s
 
             # print score
-            prCyan('noisy RL agent fitness:{}'.format(f))
+            prCyan(f'noisy RL agent fitness:{f}')
 
         for i in range(args.n_actor):
+            # if debug: print(f"Training actor {i}")
             agent.train(actor_steps, i)
 
         # saving models and scores
         if step_cpt >= args.period:
+            if debug: print("Logging")
 
             step_cpt = 0
-            if args.save_all_models:
-                os.makedirs(args.output + "/{}_steps".format(total_steps),
-                            exist_ok=True)
-                agent.save(args.output + "/{}_steps".format(total_steps))
-            else:
-                agent.save(args.output)
 
             fs = []
             for i in range(args.n_actor):
                 f, _ = evaluate(
-                    agent.actors[i], envs[i], n_episodes=args.n_eval)
+                    agent.actors[i], envs[i], n_episodes=args.n_eval, seed=seed)
                 fs.append(f)
 
                 # print score
-                prRed('RL agent fitness:{}'.format(f))
+                prRed(f'RL agent fitness:{f}')
 
             # saving scores
             res = {"total_steps": total_steps,
                    "average_score": np.mean(fs), "best_score": np.max(fs)}
+            # print(f"Saving results: {res}")
+
+            bar.set_description(f"Total steps: {total_steps} - Average score: {np.mean(fs)}")
+            bar.update(actor_steps)
+
             for i in range(args.n_actor):
-                res["score_{}".format(i)] = fs[i]
-            df = df.append(res, ignore_index=True)
-            df.to_pickle(args.output + "/log.pkl")
+                res[f"score_{i}"] = fs[i]
+
+            if args.wandb != "":
+                wandb_run.log(res)
+
             n += 1
 
         # printing iteration resume
         if debug:
-            prPurple('Iteration#{}: Total steps:{} \n'.format(
-                n, total_steps))
+            prPurple(f'Iteration#{n}: Total steps:{total_steps} \n')
+
+    if debug: print("Training done")
 
 
 if __name__ == "__main__":
@@ -192,6 +220,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_test', default=1, type=int)
 
     # misc
+    parser.add_argument('--wandb', default='', type=str)
     parser.add_argument('--output', default='results', type=str)
     parser.add_argument('--save_all_models',
                         dest="save_all_models", action="store_true")
@@ -200,11 +229,11 @@ if __name__ == "__main__":
     parser.add_argument('--render', dest='render', action='store_true')
 
     args = parser.parse_args()
-    args.output = get_output_folder(args.output, args.env)
+    # args.output = get_output_folder(args.output, args.env)
 
-    with open(args.output + "/parameters.txt", 'w') as file:
-        for key, value in vars(args).items():
-            file.write("{} = {}\n".format(key, value))
+    # with open(args.output + "/parameters.txt", 'w') as file:
+    #     for key, value in vars(args).items():
+    #         file.write("{} = {}\n".format(key, value))
 
     # The environment
     envs = [gym.make(args.env) for _ in range(args.n_actor)]
@@ -215,8 +244,8 @@ if __name__ == "__main__":
     # Random seed
     if args.seed > 0:
         np.random.seed(args.seed)
-        for j in range(args.n_actor):
-            envs[j].seed(args.seed)
+        # for j in range(args.n_actor):
+            # envs[j].seed(args.seed)
         torch.manual_seed(args.seed)
 
     # replay buffer
@@ -237,7 +266,7 @@ if __name__ == "__main__":
 
     if args.mode == 'train':
         train(n_episodes=args.n_episodes,
-              output=args.output, debug=args.debug, render=args.render)
+              output=args.output, debug=args.debug, render=args.render, seed=args.seed)
 
     else:
         raise RuntimeError('undefined mode {}'.format(args.mode))
